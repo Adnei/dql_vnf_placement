@@ -19,9 +19,35 @@ class NetworkTopologyGenerator:
         self.ensure_no_ran_transport_connections()
         self.ensure_no_ran_core_connections()
         self.ensure_no_core_edge_connections()
+        self.add_edge_attributes()
 
     def initialize_node_types(self):
         """Assigns node types in a hierarchical manner (RAN, Edge, Transport, Core)."""
+
+        node_types = ["RAN", "Edge", "Transport", "Core"]
+        node_attributes = {
+            "RAN": {
+                "cpu_limit": random.randint(5, 10),
+                "energy_base": random.uniform(50, 100),
+                "energy_per_vcpu": random.uniform(5, 15),
+            },
+            "Edge": {
+                "cpu_limit": random.randint(10, 20),
+                "energy_base": random.uniform(100, 200),
+                "energy_per_vcpu": random.uniform(5, 15),
+            },
+            "Transport": {
+                "cpu_limit": random.randint(15, 25),
+                "energy_base": random.uniform(200, 300),
+                "energy_per_vcpu": random.uniform(5, 15),
+            },
+            "Core": {
+                "cpu_limit": random.randint(20, 30),
+                "energy_base": random.uniform(300, 400),
+                "energy_per_vcpu": random.uniform(5, 15),
+            },
+        }
+
         ran_count = int(self.n_nodes * 0.4)
         edge_count = int(self.n_nodes * 0.3)
         transport_count = int(self.n_nodes * 0.2)
@@ -47,6 +73,12 @@ class NetworkTopologyGenerator:
                 )
             }
         )
+
+        for node in self.graph.nodes():
+            self.graph.nodes[node]["type"] = self.node_types[node]
+            self.graph.nodes[node]["hosted_vnfs"] = []
+            self.graph.nodes[node]["cpu_usage"] = 0
+            self.graph.nodes[node].update(node_attributes[self.node_types[node]])
 
     def ensure_ran_edge_connections(self):
         """Ensures each RAN node is connected to at least one Edge node and avoids any RAN-RAN connections."""
@@ -157,6 +189,15 @@ class NetworkTopologyGenerator:
             for core_node in core_nodes:
                 if self.graph.has_edge(edge_node, core_node):
                     self.graph.remove_edge(edge_node, core_node)
+
+    # @FIXME need more realistic values!
+    def add_edge_attributes(self):
+        for edge in self.graph.edges():
+            self.graph.edges[edge]["latency"] = random.uniform(1, 10)  # Latency in ms
+            self.graph.edges[edge]["link_capacity"] = random.randint(
+                100, 1000
+            )  # Link capacity in Mbps
+            self.graph.edges[edge]["link_usage"] = 0  # Initialize link usage
 
     def draw(self, file_name="topology.pdf"):
         """Draws the network topology with colors indicating node types."""
