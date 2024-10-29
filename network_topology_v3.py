@@ -193,7 +193,7 @@ class NetworkTopologyGenerator:
     # @FIXME need more realistic values!
     def add_edge_attributes(self):
         for edge in self.graph.edges():
-            self.graph.edges[edge]["latency"] = random.uniform(1, 3)  # Latency in ms
+            self.graph.edges[edge]["latency"] = random.uniform(1, 1.5)  # Latency in ms
             self.graph.edges[edge]["link_capacity"] = random.randint(
                 15000, 50000
             )  # Link capacity in Mbps
