@@ -3,3 +3,4 @@ matplotlib
 torch
 numpy
 PyQt5
+gymnasium

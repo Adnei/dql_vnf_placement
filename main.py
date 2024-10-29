@@ -14,10 +14,10 @@ from evaluator import Evaluator
 def create_random_vnfs(num_vnfs):
     vnfs = []
     for vnf_id in range(num_vnfs):
-        delay = round(random.uniform(0.1, 1.0), 2)  # Delay between 0.1 and 1 ms
+        delay = round(random.uniform(0.1, 0.5), 2)  # Delay between 0.1 and 0.5 ms
         vcpu_usage = random.randint(1, 4)  # vCPU usage between 1 and 4
-        network_usage = random.randint(50, 500)  # Network usage between 50 and 500 Mbps
-        vnfs.append(VNF(vnf_id, delay, vcpu_usage, network_usage))
+        # network_usage = random.randint(50, 500)  # Network usage between 50 and 500 Mbps
+        vnfs.append(VNF(vnf_id, delay, vcpu_usage))
     return vnfs
 
 
@@ -26,9 +26,10 @@ def create_random_slices(num_slices, vnfs, topology):
     for slice_id in range(num_slices):
         # Randomly pick slice types and QoS requirements
         slice_type = random.choice(["uRLLC", "mMTC", "eMBB", "OTHER"])
-        latency = random.randint(1, 10)  # Latency in ms
-        bandwidth = random.randint(100, 1000)  # Bandwidth in Mbps
-        qos = QoS(slice_id, latency, bandwidth)
+        latency = random.randint(5, 10)  # Latency in ms
+        edge_latency = random.choice([None] + list(range(1, 5)))
+        bandwidth = random.randint(100, 200)  # Bandwidth in Mbps
+        qos = QoS(slice_id, latency, bandwidth, edge_latency)
 
         # Select origin and path based on the topology (simplified)
         origin_node = random.choice(
@@ -54,69 +55,54 @@ def create_random_slices(num_slices, vnfs, topology):
 # def main():
 
 if __name__ == "__main__":
-    # Step 1: Create the network topology
-    generator = NetworkTopologyGenerator()
-    topology = generator.graph
-    generator.draw("topology.pdf")
 
-    # Step 2: Create VNFs and network slices
-    vnfs = create_random_vnfs(num_vnfs=10)
-    slices = create_random_slices(num_slices=3, vnfs=vnfs, topology=topology)
+    topology = NetworkTopologyGenerator()
+    origin_node = random.choice(
+        [n for n, attr in topology.graph.nodes(data=True) if attr["type"] == "RAN"]
+    )
+    # Setup: Define VNFs, Slices, QoS, and Network
+    vnfs = [
+        VNF(vnf_id=1, vnf_type="RAN", delay=0.5, vcpu_usage=2),
+        VNF(vnf_id=3, vnf_type="Transport", delay=0.1, vcpu_usage=1),
+        VNF(vnf_id=2, vnf_type="Core", delay=0.5, vcpu_usage=4),
+    ]
+    qos = QoS(qos_id=1, latency=20, edge_latency=5, bandwidth=100)
+    slices = [
+        NetworkSlice(
+            slice_id=1,
+            slice_type="eMBB",
+            qos_requirement=qos,
+            origin=origin_node,
+            vnf_list=vnfs,
+        )
+    ]
 
-    # Step 3: Create the VNF placement environment
-    env = VNFPlacementEnv(topology=topology, slices=slices)
+    # Environment and Agent
+    # topology.draw()
+    env = VNFPlacementEnv(topology, slices)
+    agent = DQNAgent(
+        state_size=len(topology.graph.nodes), action_size=len(topology.graph.nodes)
+    )
 
-    # Step 4: Initialize the DQN agent
-    # state_size = env.state.shape[0]  # Size of the state space
-    # action_size = len(vnfs) * len(
-    #    topology.nodes
-    # )  # Number of possible actions (VNF, Node)
-    state_size = len(env.get_state())
-    action_size = len(topology.nodes)
-    agent = DQNAgent(state_dim=state_size, action_dim=action_size)
-
-    # @TODO> this should be a method --> agent.train()
-    # Step 5: Train the DQN agent
-    num_episodes = 1000
-    # batch_size = 32
-
-    for episode in range(num_episodes):
-        state = env.reset()  # Reset the environment for a new episode
-        total_reward = 0
+    # Train
+    episodes = 5000
+    for e in range(episodes):
         done = False
-
+        total_reward = 0
+        state = env.reset()
         while not done:
-            action = agent.act(state)  # Agent chooses action based on state
-            next_state, reward, done, _ = env.step(
-                action
-            )  # Apply action in the environment
-            agent.remember(state, action, reward, next_state, done)  # Store experience
-            state = next_state  # Move to next state
+            action = agent.act(state)
+            next_state, reward, done, _ = env.step(action)
+            agent.remember(state, action, reward, next_state, done)
+            state = next_state
             total_reward += reward
+        if len(agent.memory) > 32:
+            agent.replay(32)
+        print(f"Episode {e}/{episodes} - Total Reward: {total_reward}")
 
-            # if len(agent.memory) > batch_size:
-        agent.replay()  # Train the agent with experience replay
-
-        print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
-
-    # Step 6: Save the trained model
     trained_file = "dqn_agent.pth"
     agent.save("dqn_agent.pth")
     print("Training completed and model saved.")
-
-    # Step 7: Evaluate the trained agent
-    evaluator = Evaluator(topology, slices, trained_file)
-    energy_dqn = evaluator.evaluate_model()
-    print(f"Energy consumption using DQN: {energy_dqn} Watts")
-
-    # Random, greedy, and round-robin placement for comparison
-    energy_random = evaluator.random_vnf_placement()
-    energy_greedy = evaluator.greedy_vnf_placement()
-    energy_rr = evaluator.round_robin_vnf_placement()
-
-    print(f"Energy consumption (Random): {energy_random} Watts")
-    print(f"Energy consumption (Greedy): {energy_greedy} Watts")
-    print(f"Energy consumption (Round Robin): {energy_rr} Watts")
 
 
 #    main()

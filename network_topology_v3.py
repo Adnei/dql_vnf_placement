@@ -27,22 +27,22 @@ class NetworkTopologyGenerator:
         node_types = ["RAN", "Edge", "Transport", "Core"]
         node_attributes = {
             "RAN": {
-                "cpu_limit": random.randint(5, 10),
+                "cpu_limit": random.randint(64, 128),
                 "energy_base": random.uniform(50, 100),
                 "energy_per_vcpu": random.uniform(5, 15),
             },
             "Edge": {
-                "cpu_limit": random.randint(10, 20),
+                "cpu_limit": random.randint(64, 128),
                 "energy_base": random.uniform(100, 200),
                 "energy_per_vcpu": random.uniform(5, 15),
             },
             "Transport": {
-                "cpu_limit": random.randint(15, 25),
+                "cpu_limit": random.randint(128, 256),
                 "energy_base": random.uniform(200, 300),
                 "energy_per_vcpu": random.uniform(5, 15),
             },
             "Core": {
-                "cpu_limit": random.randint(20, 30),
+                "cpu_limit": random.randint(256, 512),
                 "energy_base": random.uniform(300, 400),
                 "energy_per_vcpu": random.uniform(5, 15),
             },
@@ -193,9 +193,9 @@ class NetworkTopologyGenerator:
     # @FIXME need more realistic values!
     def add_edge_attributes(self):
         for edge in self.graph.edges():
-            self.graph.edges[edge]["latency"] = random.uniform(1, 10)  # Latency in ms
+            self.graph.edges[edge]["latency"] = random.uniform(1, 3)  # Latency in ms
             self.graph.edges[edge]["link_capacity"] = random.randint(
-                100, 1000
+                15000, 50000
             )  # Link capacity in Mbps
             self.graph.edges[edge]["link_usage"] = 0  # Initialize link usage
 
