@@ -31,6 +31,18 @@ class VNFPlacementEnv(gym.Env):
         self.current_vnf_index = 0
         for slice_obj in self.slices:
             slice_obj.path = [slice_obj.origin]
+
+        # Cleaning network topology
+        # Edges -
+
+        for u, v, attrs in self.topology.graph.edges(data=True):
+            attrs["link_usage"] = 0
+
+        # Node attrs
+        for node_id, node_data in self.topology.graph.nodes(data=True):
+            node_data["cpu_usage"] = 0
+            node_data["hosted_vnfs"] = []
+
         return self._get_observation()
 
     def _get_observation(self):
@@ -106,7 +118,9 @@ class VNFPlacementEnv(gym.Env):
             else:
                 attempts += 1
                 action = (action + 1) % len(self.topology.graph.nodes)  # Try next node
-                reward = -10  # Penalize each failed attempt to encourage exploration
+                reward = (
+                    -100000
+                )  # Penalize each failed attempt to encourage exploration
                 done = False
         # If maximum attempts are reached and VNF cannot be placed, terminate episode
         if attempts == max_attempts:
