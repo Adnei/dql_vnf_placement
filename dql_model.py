@@ -75,7 +75,7 @@ class DQNAgent:
 
     # def act(self, state):
     #     """Choose action based on epsilon-greedy policy."""
-    #     print(f"STATE: {state}")
+    #     # print(f"STATE: {state}")
     #     if np.random.rand() <= self.epsilon:
     #         return random.randrange(self.action_dim)
     #     state = torch.FloatTensor(state).unsqueeze(0)
