@@ -42,8 +42,8 @@ class DQNAgent:
         gamma=0.99,
         epsilon=1.0,
         lr=0.001,
-        epsilon_min=0.01,
-        epsilon_decay=0.995,
+        epsilon_min=0.15,  # default 0.01
+        epsilon_decay=0.995,  # default 0.995
     ):
         """
         Initialize the DQN agent.

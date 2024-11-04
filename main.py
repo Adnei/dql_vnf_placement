@@ -28,18 +28,21 @@ agent = DQNAgent(input_dim=input_dim, action_dim=action_dim, node_ids=node_ids)
 
 # Training the agent
 episodes = 1000
+max_attempts = len(topology.graph.nodes) * 2
 for episode in range(episodes):
     state = env.reset()
     done = False
     total_reward = 0
 
-    while not done:
+    for attempt in range(max_attempts):
         action = agent.act(state)
         # print(f"STARTING action: {action}")
         next_state, reward, done, _ = env.step(action)
         agent.remember(state, action, reward, next_state, done)
         state = next_state
         total_reward += reward
+        if done:
+            break
 
     agent.replay()  # Train on memory replay after each episode
     print(f"Episode {episode + 1}/{episodes}, Total Reward: {total_reward}")
