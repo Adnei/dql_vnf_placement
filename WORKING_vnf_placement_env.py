@@ -33,16 +33,6 @@ class VNFPlacementEnv(gym.Env):
             node_data["cpu_usage"] = 0
             node_data["hosted_vnfs"] = []
 
-        # We place the first VNF to the origin node.
-        for slice_obj in self.slices:
-            slice_obj.path = [slice_obj.origin]
-            self.topology.graph.nodes[slice_obj.origin]["hosted_vnfs"] = (
-                slice_obj.vnf_list[0]
-            )
-            self.topology.graph.nodes[slice_obj.origin]["cpu_usage"] = (
-                slice_obj.vnf_list[0].vcpu_usage
-            )
-        self.current_vnf_index = 1
         # Precompute valid K-shortest paths from the slice origin to Core nodes
         self.valid_paths = self._compute_k_shortest_paths(k=5)
         return self._get_observation()
@@ -134,24 +124,10 @@ class VNFPlacementEnv(gym.Env):
             observations.append(node_observation)
         return np.array(observations)
 
-    def _get_valid_actions(self):
-        """Generate a list of valid actions (node indices) for the current VNF placement."""
-        current_slice = self.slices[self.current_slice_index]
-        current_vnf = current_slice.vnf_list[self.current_vnf_index]
-        valid_actions = []
-
-        for idx, node_id in enumerate(self.node_ids):
-            node_data = self.topology.graph.nodes[node_id]
-            hypothetical_path = self._get_hypothetical_path(current_slice, node_id)
-            if self._can_place_vnf_on_node(
-                current_vnf, node_id, current_slice, hypothetical_path
-            ):
-                valid_actions.append(idx)
-
-        return valid_actions
-
     def step(self, action):
-        valid_actions = self._get_valid_actions()
+        valid_actions = [
+            i for i, node_id in enumerate(self.node_ids) if node_id in self.valid_paths
+        ]
         if action not in valid_actions:
             return self._get_observation(), -1000, False, {}
 
@@ -176,7 +152,7 @@ class VNFPlacementEnv(gym.Env):
             done = self.current_slice_index == len(self.slices) - 1
             if not done:
                 self.current_slice_index += 1
-                self.current_vnf_index = 1  # Assuming VNF 0 is already placed at origin
+                self.current_vnf_index = 0
                 reward += 200
         else:
             self.current_vnf_index += 1
@@ -320,29 +296,3 @@ class VNFPlacementEnv(gym.Env):
         except nx.NetworkXNoPath:
             print(f"Connected graph. It should have a path. Something is wrong!")
         return hypothetical_path
-
-    def _find_minimum_energy_placement(self, current_slice, current_vnf):
-        # Calculate the minimum energy among all possible valid placements for this VNF
-        min_energy = float("inf")
-        for alt_node_id in self.node_ids:
-            alt_node = self.topology.graph.nodes[alt_node_id]
-
-            alt_path = []
-            try:
-                alt_path = nx.shortest_path(
-                    self.topology.graph,
-                    source=current_slice.path[-1],
-                    target=alt_node_id,
-                    weight="latency",
-                )
-            except nx.NetworkXNoPath:
-                print(f"Connected graph. It should have a path. Something is wrong!")
-            if self._can_place_vnf_on_node(
-                current_vnf, alt_node_id, current_slice, alt_path
-            ):
-                alt_energy = self._calculate_potential_energy(
-                    current_slice, alt_node_id, alt_path
-                )
-                if alt_energy < min_energy:
-                    min_energy = alt_energy
-        return min_energy

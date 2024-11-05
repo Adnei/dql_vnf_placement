@@ -7,24 +7,28 @@ import time
 
 class VNFPlacementEnv(gym.Env):
     def __init__(self, topology, slices):
+        """
+        Initialize the VNF placement environment.
+
+        :param topology: NetworkTopologyGenerator object representing the network topology
+        :param slices: List of NetworkSlices to instantiate
+        """
         super(VNFPlacementEnv, self).__init__()
         self.topology = topology
         self.slices = slices
         self.current_slice_index = 0
         self.current_vnf_index = 0
         self.node_ids = list(self.topology.graph.nodes)
-        self.cached_paths = {}
-        self.action_space = gym.spaces.Discrete(len(self.node_ids))
+        # Define action and observation space
+        self.action_space = gym.spaces.Discrete(len(self.topology.graph.nodes))
         self.observation_space = gym.spaces.Box(
-            low=0, high=1, shape=(len(self.node_ids), 7), dtype=np.float32
+            low=0, high=1, shape=(len(self.topology.graph.nodes), 7), dtype=np.float32
         )
 
     def reset(self):
         """Reset the environment for a new episode."""
         self.current_slice_index = 0
         self.current_vnf_index = 0
-        for slice_obj in self.slices:
-            slice_obj.path = [slice_obj.origin]
 
         # Clean network topology
         for u, v, attrs in self.topology.graph.edges(data=True):
@@ -44,7 +48,7 @@ class VNFPlacementEnv(gym.Env):
             )
         self.current_vnf_index = 1
         # Precompute valid K-shortest paths from the slice origin to Core nodes
-        self.valid_paths = self._compute_k_shortest_paths(k=5)
+        self.valid_paths = self._compute_k_shortest_paths(k=5)  # Assuming k=5
         return self._get_observation()
 
     def _compute_k_shortest_paths(self, k=5):
@@ -52,6 +56,8 @@ class VNFPlacementEnv(gym.Env):
         valid_paths = []
         current_slice = self.slices[self.current_slice_index]
         origin = current_slice.origin
+
+        # Filter only Core nodes as targets
         core_nodes = [
             node
             for node in self.node_ids
@@ -70,7 +76,7 @@ class VNFPlacementEnv(gym.Env):
                     valid_paths.append(path)
                     count += 1
                 else:
-                    break
+                    break  # Stop if the path does not meet QoS
         return valid_paths
 
     def _check_path_qos(self, path):
@@ -99,7 +105,23 @@ class VNFPlacementEnv(gym.Env):
         # Filter nodes only from precomputed valid paths
         nodes_in_paths = set(node for path in self.valid_paths for node in path)
 
-        for node_id in nodes_in_paths:
+        valid_nodes = [
+            node_id
+            for node_id in nodes_in_paths
+            if self._can_place_vnf_on_node(
+                current_vnf,
+                node_id,
+                current_slice,
+                nx.shortest_path(
+                    self.topology.graph,
+                    source=current_slice.path[-1],
+                    target=node_id,
+                    weight="latency",
+                ),
+            )
+        ]
+
+        for node_id in valid_nodes:
             node_data = self.topology.graph.nodes[node_id]
             hypothetical_path = nx.shortest_path(
                 self.topology.graph,
@@ -107,7 +129,6 @@ class VNFPlacementEnv(gym.Env):
                 target=node_id,
                 weight="latency",
             )
-
             # Encode node type as a one-hot vector (RAN, Edge, Transport, Core)
             node_type_one_hot = [0, 0, 0, 0]
             if node_data["type"] == "RAN":
@@ -126,61 +147,120 @@ class VNFPlacementEnv(gym.Env):
                 + (
                     node_data["energy_per_vcpu"] * node_data["cpu_usage"]
                 ),  # Node's current energy cost
-                -self._calculate_potential_energy(
-                    current_slice, node_id, hypothetical_path
-                ),  # Potential reward based on energy
+                (
+                    -self._calculate_potential_energy(
+                        current_slice, node_id, hypothetical_path
+                    )
+                ),
             ] + node_type_one_hot  # Append one-hot node type
 
             observations.append(node_observation)
         return np.array(observations)
 
-    def _get_valid_actions(self):
-        """Generate a list of valid actions (node indices) for the current VNF placement."""
+    def step(self, action):
+        """
+        Execute one step in the environment based on the selected action.
+
+        :param action: Index in the node_ids list for VNF placement
+        :return: Tuple (observation, reward, done, info)
+        """
+        reward = 0  # No reward if the selected node is not valid!!
+        done = False
         current_slice = self.slices[self.current_slice_index]
         current_vnf = current_slice.vnf_list[self.current_vnf_index]
-        valid_actions = []
-
-        for idx, node_id in enumerate(self.node_ids):
-            node_data = self.topology.graph.nodes[node_id]
-            hypothetical_path = self._get_hypothetical_path(current_slice, node_id)
-            if self._can_place_vnf_on_node(
-                current_vnf, node_id, current_slice, hypothetical_path
-            ):
-                valid_actions.append(idx)
-
-        return valid_actions
-
-    def step(self, action):
-        valid_actions = self._get_valid_actions()
-        if action not in valid_actions:
-            return self._get_observation(), -1000, False, {}
 
         node_id = self.node_ids[action]
-        current_slice = self.slices[self.current_slice_index]
-        current_vnf = current_slice.vnf_list[self.current_vnf_index]
-        hypothetical_path = self._get_hypothetical_path(current_slice, node_id)
-        chosen_energy = self._calculate_potential_energy(
-            current_slice, node_id, hypothetical_path
+        node = self.topology.graph.nodes[node_id]
+
+        hypothetical_path = []
+        try:
+            hypothetical_path = nx.shortest_path(
+                self.topology.graph,
+                source=current_slice.path[-1],
+                target=node_id,
+                weight="latency",
+            )
+        except nx.NetworkXNoPath:
+            print(f"Connected graph. It should have a path. Something is wrong!")
+        # Check if the node is valid for the VNF placement
+        is_valid = self._can_place_vnf_on_node(
+            current_vnf, node_id, current_slice, hypothetical_path
         )
 
-        node = self.topology.graph.nodes[node_id]
-        node["hosted_vnfs"].append(current_vnf)
-        current_slice.path.extend(hypothetical_path[1:])
-        node["cpu_usage"] += current_vnf.vcpu_usage
+        if is_valid:
+            # Calculate the energy for this placement
+            chosen_energy = self._calculate_potential_energy(
+                current_slice, node_id, hypothetical_path
+            )
 
-        min_energy = self._find_minimum_energy_placement(current_slice, current_vnf)
-        reward = 50 + (50 - (chosen_energy - min_energy) / min_energy * 50)
+            # Calculate the minimum energy among all possible valid placements for this VNF
+            min_energy = float("inf")
+            for alt_node_id in self.node_ids:
+                alt_node = self.topology.graph.nodes[alt_node_id]
 
-        if self.current_vnf_index == len(current_slice.vnf_list) - 1:
-            self._update_edges(current_slice)
-            done = self.current_slice_index == len(self.slices) - 1
-            if not done:
-                self.current_slice_index += 1
-                self.current_vnf_index = 1  # Assuming VNF 0 is already placed at origin
-                reward += 200
+                alt_path = []
+                try:
+                    alt_path = nx.shortest_path(
+                        self.topology.graph,
+                        source=current_slice.path[-1],
+                        target=alt_node_id,
+                        weight="latency",
+                    )
+                except nx.NetworkXNoPath:
+                    print(
+                        f"Connected graph. It should have a path. Something is wrong!"
+                    )
+                if self._can_place_vnf_on_node(
+                    current_vnf, alt_node_id, current_slice, alt_path
+                ):
+                    alt_energy = self._calculate_potential_energy(
+                        current_slice, alt_node_id, alt_path
+                    )
+                    if alt_energy < min_energy:
+                        min_energy = alt_energy
+
+            # Calculate reward based on chosen vs. minimum energy
+            if chosen_energy <= min_energy:
+                reward = (
+                    50  # Highest reward for selecting the most energy-efficient option
+                )
+            else:
+                # Reward decreases the further the chosen energy is from the minimum
+                reward = 50 - (chosen_energy - min_energy) / min_energy * 50
+            reward += 20
+            # Place the VNF on the selected node (actual placement after decision)
+            node["hosted_vnfs"].append(current_vnf)
+            part_path = nx.shortest_path(
+                self.topology.graph,
+                source=(
+                    current_slice.path[-1]
+                    if current_slice.path
+                    else current_slice.origin
+                ),
+                target=node_id,
+                weight="latency",
+            )
+            current_slice.path = current_slice.path[:-1] + part_path
+            node["cpu_usage"] += current_vnf.vcpu_usage
+
+            # Update indices and check if the episode should end
+            if self.current_vnf_index == len(current_slice.vnf_list) - 1:
+                reward += 500
+                self._update_edges(current_slice)
+                done = self.current_slice_index == len(self.slices) - 1
+                if not done:
+                    self.current_slice_index += 1
+                    self.current_vnf_index = (
+                        1  # Assuming VNF 0 is already placed at origin
+                    )
+            else:
+                self.current_vnf_index += 1
+                done = False
         else:
-            self.current_vnf_index += 1
-            done = False
+            reward = -500
+            # Large penalty for invalid node selection
+            # reward = -1000
+            # done = False
 
         return self._get_observation(), reward, done, {}
 
@@ -307,42 +387,3 @@ class VNFPlacementEnv(gym.Env):
     def render(self, mode="human"):
         """Render the environment's current state."""
         print("Rendering environment state (extend for more detail)")
-
-    def _get_hypothetical_path(self, current_slice, node_id):
-        hypothetical_path = []
-        try:
-            hypothetical_path = nx.shortest_path(
-                self.topology.graph,
-                source=current_slice.path[-1],
-                target=node_id,
-                weight="latency",
-            )
-        except nx.NetworkXNoPath:
-            print(f"Connected graph. It should have a path. Something is wrong!")
-        return hypothetical_path
-
-    def _find_minimum_energy_placement(self, current_slice, current_vnf):
-        # Calculate the minimum energy among all possible valid placements for this VNF
-        min_energy = float("inf")
-        for alt_node_id in self.node_ids:
-            alt_node = self.topology.graph.nodes[alt_node_id]
-
-            alt_path = []
-            try:
-                alt_path = nx.shortest_path(
-                    self.topology.graph,
-                    source=current_slice.path[-1],
-                    target=alt_node_id,
-                    weight="latency",
-                )
-            except nx.NetworkXNoPath:
-                print(f"Connected graph. It should have a path. Something is wrong!")
-            if self._can_place_vnf_on_node(
-                current_vnf, alt_node_id, current_slice, alt_path
-            ):
-                alt_energy = self._calculate_potential_energy(
-                    current_slice, alt_node_id, alt_path
-                )
-                if alt_energy < min_energy:
-                    min_energy = alt_energy
-        return min_energy

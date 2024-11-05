@@ -86,18 +86,15 @@ class DQNAgent:
     def act(self, state):
         """Choose action based on epsilon-greedy policy."""
         if np.random.rand() <= self.epsilon:
-            # Select a random node from the valid node IDs
-            return random.choice(self.node_ids)
+            # Select a random index within the action space
+            return random.randint(0, self.action_dim - 1)
 
         state = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             action_values = self.model(state)
 
         # Use the max Q-value action
-        action_index = torch.argmax(action_values).item()
-        return self.node_ids[
-            action_index % len(self.node_ids)
-        ]  # Map index to actual node ID
+        return torch.argmax(action_values).item()  # Return action as index
 
     def replay(self):
         """Train the DQN with experiences sampled from memory."""
@@ -108,10 +105,20 @@ class DQNAgent:
         for state, action, reward, next_state, done in batch:
             state = torch.FloatTensor(state)
             next_state = torch.FloatTensor(next_state)
+
+            # Calculate the target Q-value
             target = reward + (
                 self.gamma * torch.max(self.model(next_state)).item() * (1 - done)
             )
+
+            # Get the predicted Q-values from the current state
             target_f = self.model(state)
+
+            # Ensure action is within the bounds of target_f
+            if action >= len(target_f):
+                action = len(target_f) - 1  # Adjust action if out of bounds
+
+            # Update only the chosen action's Q-value
             target_f[action] = target
 
             # Optimize the model
