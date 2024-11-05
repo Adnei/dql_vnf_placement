@@ -35,7 +35,8 @@ for episode in range(episodes):
     total_reward = 0
 
     for attempt in range(max_attempts):
-        action = agent.act(state)
+        valid_actions = env.valid_actions
+        action = agent.act(state, valid_actions)
         # print(f"STARTING action: {action}")
         next_state, reward, done, _ = env.step(action)
         agent.remember(state, action, reward, next_state, done)

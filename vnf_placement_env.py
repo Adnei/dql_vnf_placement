@@ -16,15 +16,14 @@ class VNFPlacementEnv(gym.Env):
         self.cached_paths = {}
         self.action_space = gym.spaces.Discrete(len(self.node_ids))
         self.observation_space = gym.spaces.Box(
-            low=0, high=1, shape=(len(self.node_ids), 7), dtype=np.float32
+            low=0, high=1, shape=(len(self.node_ids), 3), dtype=np.float32
         )
+        self.valid_actions = []
 
     def reset(self):
         """Reset the environment for a new episode."""
         self.current_slice_index = 0
         self.current_vnf_index = 0
-        for slice_obj in self.slices:
-            slice_obj.path = [slice_obj.origin]
 
         # Clean network topology
         for u, v, attrs in self.topology.graph.edges(data=True):
@@ -43,35 +42,7 @@ class VNFPlacementEnv(gym.Env):
                 slice_obj.vnf_list[0].vcpu_usage
             )
         self.current_vnf_index = 1
-        # Precompute valid K-shortest paths from the slice origin to Core nodes
-        self.valid_paths = self._compute_k_shortest_paths(k=5)
         return self._get_observation()
-
-    def _compute_k_shortest_paths(self, k=5):
-        """Compute the K-shortest paths from the origin RAN node to all Core nodes."""
-        valid_paths = []
-        current_slice = self.slices[self.current_slice_index]
-        origin = current_slice.origin
-        core_nodes = [
-            node
-            for node in self.node_ids
-            if self.topology.graph.nodes[node]["type"] == "Core"
-        ]
-
-        for target in core_nodes:
-            paths = shortest_simple_paths(
-                self.topology.graph, source=origin, target=target, weight="latency"
-            )
-            count = 0
-            for path in paths:
-                if count >= k:
-                    break
-                if self._check_path_qos(path):
-                    valid_paths.append(path)
-                    count += 1
-                else:
-                    break
-        return valid_paths
 
     def _check_path_qos(self, path):
         """Check if a path meets QoS requirements (latency and bandwidth)."""
@@ -96,10 +67,28 @@ class VNFPlacementEnv(gym.Env):
         current_slice = self.slices[self.current_slice_index]
         current_vnf = current_slice.vnf_list[self.current_vnf_index]
 
-        # Filter nodes only from precomputed valid paths
-        nodes_in_paths = set(node for path in self.valid_paths for node in path)
+        # Filter nodes matching current vnf type
+        nodes_matching_vnf_type = [
+            node_id
+            for node_id, data in self.topology.graph.nodes(data=True)
+            if data["type"] == current_vnf.vnf_type
+        ]
 
-        for node_id in nodes_in_paths:
+        self.valid_actions = [
+            node_id
+            for node_id in nodes_matching_vnf_type
+            if self._can_place_vnf_on_node(
+                current_vnf,
+                node_id,
+                current_slice,
+                self._get_hypothetical_path(current_slice, node_id),
+            )
+        ]
+
+        # print(f"VNF to be placed: {current_vnf}")
+        # print(f"Valid Nodes: {valid_nodes} \n")
+
+        for node_id in self.valid_actions:
             node_data = self.topology.graph.nodes[node_id]
             hypothetical_path = nx.shortest_path(
                 self.topology.graph,
@@ -108,28 +97,18 @@ class VNFPlacementEnv(gym.Env):
                 weight="latency",
             )
 
-            # Encode node type as a one-hot vector (RAN, Edge, Transport, Core)
-            node_type_one_hot = [0, 0, 0, 0]
-            if node_data["type"] == "RAN":
-                node_type_one_hot[0] = 1
-            elif node_data["type"] == "Edge":
-                node_type_one_hot[1] = 1
-            elif node_data["type"] == "Transport":
-                node_type_one_hot[2] = 1
-            elif node_data["type"] == "Core":
-                node_type_one_hot[3] = 1
+            total_latency = nx.path_weight(
+                self.topology.graph, hypothetical_path, weight="latency"
+            )
+
+            # @TODO: Maybe work on a "nodeScore"?
 
             # Construct the observation vector for the node
             node_observation = [
                 node_data["cpu_limit"] - node_data["cpu_usage"],  # Available CPU
-                node_data["energy_base"]
-                + (
-                    node_data["energy_per_vcpu"] * node_data["cpu_usage"]
-                ),  # Node's current energy cost
-                -self._calculate_potential_energy(
-                    current_slice, node_id, hypothetical_path
-                ),  # Potential reward based on energy
-            ] + node_type_one_hot  # Append one-hot node type
+                -self._calculate_path_energy(hypothetical_path, place_vnf=current_vnf),
+                -total_latency,
+            ]
 
             observations.append(node_observation)
         return np.array(observations)
@@ -151,22 +130,20 @@ class VNFPlacementEnv(gym.Env):
         return valid_actions
 
     def step(self, action):
-        valid_actions = self._get_valid_actions()
-        if action not in valid_actions:
+        # valid_actions = self._get_valid_actions()
+        if action not in self.valid_actions:
             return self._get_observation(), -1000, False, {}
 
         node_id = self.node_ids[action]
         current_slice = self.slices[self.current_slice_index]
         current_vnf = current_slice.vnf_list[self.current_vnf_index]
         hypothetical_path = self._get_hypothetical_path(current_slice, node_id)
-        chosen_energy = self._calculate_potential_energy(
-            current_slice, node_id, hypothetical_path
-        )
 
         node = self.topology.graph.nodes[node_id]
         node["hosted_vnfs"].append(current_vnf)
         current_slice.path.extend(hypothetical_path[1:])
         node["cpu_usage"] += current_vnf.vcpu_usage
+        chosen_energy = self._calculate_path_energy(current_slice.path)
 
         min_energy = self._find_minimum_energy_placement(current_slice, current_vnf)
         reward = 50 + (50 - (chosen_energy - min_energy) / min_energy * 50)
@@ -183,39 +160,6 @@ class VNFPlacementEnv(gym.Env):
             done = False
 
         return self._get_observation(), reward, done, {}
-
-    def _calculate_potential_energy(self, slice_obj, node_id, hypothetical_path):
-        """
-        Calculate the potential energy for placing a VNF at a given node without committing to it.
-
-        :param slice_obj: The current network slice object
-        :param node_id: The potential node ID where the VNF might be placed
-        :return: Total energy consumption for the path if the VNF were placed on node_id
-        """
-        if len(hypothetical_path) == 0:
-            return float("inf")
-        # Determine the start node for the path (last node in current slice path or the origin)
-        start_node = slice_obj.path[-1] if slice_obj.path else slice_obj.origin
-        # Calculate total energy for this hypothetical path
-        total_energy = 0
-
-        # Sum the energy for each node and edge along the path
-        for i in range(len(hypothetical_path) - 1):
-            edge = self.topology.graph[hypothetical_path[i]][hypothetical_path[i + 1]]
-            node = self.topology.graph.nodes[hypothetical_path[i]]
-            total_energy += (
-                node["energy_base"] + node["energy_per_vcpu"] * node["cpu_usage"]
-            )
-            total_energy += edge["latency"] * edge["link_usage"]
-
-        # Add the energy consumption of the hypothetical placement node
-        final_node = self.topology.graph.nodes[node_id]
-        total_energy += (
-            final_node["energy_base"]
-            + final_node["energy_per_vcpu"] * final_node["cpu_usage"]
-        )
-
-        return total_energy
 
     def _update_edges(self, slice_obj):
         """Update bandwidth usage and availability after the slice is deployed"""
@@ -234,9 +178,10 @@ class VNFPlacementEnv(gym.Env):
             or node["cpu_usage"] + vnf.vcpu_usage > node["cpu_limit"]
         ):
             return False
-        if not self._check_latency_feasibility(
+        path_latency, feasible = self._check_latency_feasibility(
             node_id, slice_obj, hypothetical_path
-        ) or not self._check_bandwidth_feasibility(
+        )
+        if not feasible or not self._check_bandwidth_feasibility(
             node_id, slice_obj, hypothetical_path
         ):
             return False
@@ -244,22 +189,19 @@ class VNFPlacementEnv(gym.Env):
 
     def _check_latency_feasibility(self, node_id, slice_obj, path):
         """Check if latency requirements are feasible for the given node and slice."""
-        # slice_obj.path[0] should always be the origin!!
-        # start_time = time.time()
         if node_id == slice_obj.path[0] and node_id == slice_obj.origin:
-            return True
+            return 0, True
         cumulative_latency = nx.path_weight(self.topology.graph, path, weight="latency")
         # Add the delay of each VNF placed in the current path
-        for vnf in slice_obj.vnf_list[: self.current_vnf_index + 1]:
+        for vnf in slice_obj.vnf_list[: self.current_vnf_index]:
             cumulative_latency += vnf.delay
-        # elapsed_time = time.time() - start_time
-        # print(f"_check_LATENCY_feasibility took {elapsed_time:.6f} seconds")
-        return cumulative_latency <= slice_obj.qos_requirement.latency
+        return (
+            cumulative_latency,
+            cumulative_latency <= slice_obj.qos_requirement.latency,
+        )
 
     def _check_bandwidth_feasibility(self, node_id, slice_obj, path):
         """Check if bandwidth requirements are feasible for the given node and slice."""
-        # slice_obj.path[0] should always be the origin!!
-        # start_time = time.time()
         if node_id == slice_obj.path[0] and node_id == slice_obj.origin:
             return True
 
@@ -273,40 +215,26 @@ class VNFPlacementEnv(gym.Env):
                 ]
             )
 
-            # print(f"Capacity: {bandwidth_availability}")
             if bandwidth_availability < slice_obj.qos_requirement.bandwidth:
                 return False
-        # elapsed_time = time.time() - start_time
-        # print(f"_check_BANDWIDTH_feasibility took {elapsed_time:.6f} seconds")
-
         return True
 
-    # @TODO: PAREI AQUI
-    def _calculate_path_energy(self, slice_obj):
+    def _calculate_path_energy(self, path, place_vnf=None):
         """Calculate the energy consumption for the entire slice path."""
-        # cumulative_latency = nx.path_weight(self.topology.graph, path, weight="latency")
 
         path_energy = 0
-        for node_id in slice_obj.path:
-            node = self.topology.graph.nodes[node_id]
-            path_energy += (
-                node["energy_base"] + node["energy_per_vcpu"] * node["cpu_usage"]
+
+        for node_idx in range(len(path)):
+            node = self.topology.graph.nodes[path[node_idx]]
+            alpha = 1
+            # Simulates VNF placement on last node of the path
+            if place_vnf != None and node_idx == len(path) - 1:
+                alpha = place_vnf.vcpu_usage
+            path_energy += node["energy_base"] + node["energy_per_vcpu"] * (
+                node["cpu_usage"] * alpha
             )
 
-        # print(f"PATH: {slice_obj.path}")
-        edges = self.topology.graph.edges()
-        # Add energy costs along each link in the path
-        for i in range(0, len(slice_obj.path) - 1):
-            edge = edges[[slice_obj.path[i], slice_obj.path[i + 1]]]
-            # edge = edges[slice_obj.path[i]][slice_obj.path[i + 1]]
-            # edge = self.topology.graph.edges[slice_obj.path[i]][slice_obj.path[i + 1]]
-            path_energy += edge["latency"] * edge["link_usage"]
-
-        return -path_energy  # Negative reward for higher energy consumption
-
-    def render(self, mode="human"):
-        """Render the environment's current state."""
-        print("Rendering environment state (extend for more detail)")
+        return path_energy
 
     def _get_hypothetical_path(self, current_slice, node_id):
         hypothetical_path = []
@@ -340,9 +268,13 @@ class VNFPlacementEnv(gym.Env):
             if self._can_place_vnf_on_node(
                 current_vnf, alt_node_id, current_slice, alt_path
             ):
-                alt_energy = self._calculate_potential_energy(
-                    current_slice, alt_node_id, alt_path
+                alt_energy = self._calculate_path_energy(
+                    alt_path, place_vnf=current_vnf
                 )
                 if alt_energy < min_energy:
                     min_energy = alt_energy
         return min_energy
+
+    def render(self, mode="human"):
+        """Render the environment's current state."""
+        print("Rendering environment state (extend for more detail)")

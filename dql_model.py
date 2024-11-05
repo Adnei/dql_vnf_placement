@@ -73,6 +73,30 @@ class DQNAgent:
         """Store experience in memory."""
         self.memory.append((state, action, reward, next_state, done))
 
+    def act(self, state, valid_actions):
+        """
+        Choose an action based on epsilon-greedy policy, considering only valid actions.
+
+        :param state: Current observation (state) from the environment.
+        :param valid_actions: List of valid actions (node indices) as determined by the environment.
+        :return: Chosen action (node index).
+        """
+        # Exploration: pick a random valid action
+        if np.random.rand() <= self.epsilon:
+            return random.choice(valid_actions)
+
+        # Exploitation: choose the best action among valid actions
+        state = torch.FloatTensor(state).view(1, -1)
+        with torch.no_grad():
+            q_values = self.model(state)
+
+        # Mask out invalid actions by setting their Q-values to a very low number
+        q_values_masked = torch.full_like(q_values, float("-inf"))
+        q_values_masked[0, valid_actions] = q_values[0, valid_actions]
+
+        # Select the action with the highest Q-value from valid actions
+        return torch.argmax(q_values_masked).item()
+
     # def act(self, state):
     #     """Choose action based on epsilon-greedy policy."""
     #     # print(f"STATE: {state}")
@@ -83,18 +107,18 @@ class DQNAgent:
     #         action_values = self.model(state)
     #     return torch.argmax(action_values).item()
 
-    def act(self, state):
-        """Choose action based on epsilon-greedy policy."""
-        if np.random.rand() <= self.epsilon:
-            # Select a random index within the action space
-            return random.randint(0, self.action_dim - 1)
+    # def act(self, state):
+    #     """Choose action based on epsilon-greedy policy."""
+    #     if np.random.rand() <= self.epsilon:
+    #         # Select a random index within the action space
+    #         return random.randint(0, self.action_dim - 1)
 
-        state = torch.FloatTensor(state).unsqueeze(0)
-        with torch.no_grad():
-            action_values = self.model(state)
+    #     state = torch.FloatTensor(state).unsqueeze(0)
+    #     with torch.no_grad():
+    #         action_values = self.model(state)
 
-        # Use the max Q-value action
-        return torch.argmax(action_values).item()  # Return action as index
+    #     # Use the max Q-value action
+    #     return torch.argmax(action_values).item()  # Return action as index
 
     def replay(self):
         """Train the DQN with experiences sampled from memory."""
@@ -130,3 +154,44 @@ class DQNAgent:
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+
+    # def replay(self):
+    #     """Train the DQN with experiences sampled from memory."""
+    #     if len(self.memory) < self.batch_size:
+    #         return
+
+    #     batch = random.sample(self.memory, self.batch_size)
+    #     for state, action, reward, next_state, done in batch:
+    #         # Flatten or reshape only if necessary
+    #         if len(state) != self.model.fc1.in_features:
+    #             state = torch.FloatTensor(state).flatten().view(1, -1)
+    #         else:
+    #             state = torch.FloatTensor(state).view(1, -1)
+
+    #         if len(next_state) != self.model.fc1.in_features:
+    #             next_state = torch.FloatTensor(next_state).flatten().view(1, -1)
+    #         else:
+    #             next_state = torch.FloatTensor(next_state).view(1, -1)
+
+    #         # Calculate the target Q-value
+    #         with torch.no_grad():
+    #             max_next_q = (
+    #                 torch.max(self.model(next_state)).item() if not done else 0.0
+    #             )
+    #             target = reward + self.gamma * max_next_q
+
+    #         # Get the predicted Q-values for the current state
+    #         q_values = self.model(state)
+
+    #         # Select the Q-value for the taken action
+    #         q_values[action] = target
+
+    #         # Optimize the model
+    #         self.optimizer.zero_grad()
+    #         loss = F.mse_loss(q_values, self.model(state))
+    #         loss.backward()
+    #         self.optimizer.step()
+
+    #     # Decay epsilon
+    #     if self.epsilon > self.epsilon_min:
+    #         self.epsilon *= self.epsilon_decay
