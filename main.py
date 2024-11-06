@@ -35,7 +35,7 @@ for episode in range(episodes):
     total_reward = 0
 
     for attempt in range(max_attempts):
-        valid_actions = env.valid_actions
+        valid_actions = env.get_valid_actions()
         action = agent.act(state, valid_actions)
         # print(f"STARTING action: {action}")
         next_state, reward, done, _ = env.step(action)
@@ -55,9 +55,17 @@ torch.save(agent.model.state_dict(), "dqn_model.pth")
 print("\n\n")
 # Evaluate the model
 evaluator = Evaluator(agent, topology, slices)
-print("DQN Agent Energy Consumption:", evaluator.evaluate_model())
-print("Random Placement Energy Consumption:", evaluator.random_vnf_placement())
-print("Greedy Placement Energy Consumption:", evaluator.greedy_vnf_placement())
-print(
-    "Round Robin Placement Energy Consumption:", evaluator.round_robin_vnf_placement()
-)
+
+# Evaluate the DQN Agent
+dqn_results = evaluator.evaluate_model()
+print("DQN Agent:", dqn_results)
+
+# Evaluate Baselines
+random_results = evaluator.random_vnf_placement()
+print("Random Placement:", random_results)
+
+greedy_results = evaluator.greedy_vnf_placement()
+print("Greedy Placement:", greedy_results)
+
+round_robin_results = evaluator.round_robin_vnf_placement()
+print("Round Robin Placement:", round_robin_results)

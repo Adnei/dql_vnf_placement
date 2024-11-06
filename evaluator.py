@@ -17,16 +17,27 @@ class Evaluator:
         self.slices = slices
 
     def evaluate_model(self):
-        """Evaluate energy consumption with the DQN agent."""
+        """Evaluate the DQN agent's energy consumption and QoS compliance."""
         env = VNFPlacementEnv(self.topology, self.slices)
         state = env.reset()
         done = False
         total_energy = 0
+        total_latency = 0
+        total_bandwidth = 0
+
         while not done:
-            action = self.agent.act(state)
-            state, reward, done, _ = env.step(action)
-            total_energy += -reward  # Reward is negative energy, so negate for total
-        return total_energy
+            valid_actions = env.get_valid_actions()
+            action = self.agent.act(state, valid_actions)
+            state, reward, done, info = env.step(action)
+            total_energy += -reward
+            total_latency += info.get("latency", 0)
+            total_bandwidth += info.get("bandwidth", 0)
+
+        return {
+            "total_energy": total_energy,
+            "average_latency": total_latency / len(self.slices),
+            "average_bandwidth": total_bandwidth / len(self.slices),
+        }
 
     def random_vnf_placement(self):
         """Random VNF placement evaluation."""
@@ -34,11 +45,22 @@ class Evaluator:
         state = env.reset()
         done = False
         total_energy = 0
+        total_latency = 0
+        total_bandwidth = 0
+
         while not done:
-            action = random.choice(range(env.action_space.n))
-            state, reward, done, _ = env.step(action)
+            valid_actions = env.get_valid_actions()
+            action = random.choice(valid_actions)
+            state, reward, done, info = env.step(action)
             total_energy += -reward
-        return total_energy
+            total_latency += info.get("latency", 0)
+            total_bandwidth += info.get("bandwidth", 0)
+
+        return {
+            "total_energy": total_energy,
+            "average_latency": total_latency / len(self.slices),
+            "average_bandwidth": total_bandwidth / len(self.slices),
+        }
 
     def greedy_vnf_placement(self):
         """Greedy VNF placement evaluation based on node energy cost."""
@@ -46,13 +68,24 @@ class Evaluator:
         state = env.reset()
         done = False
         total_energy = 0
+        total_latency = 0
+        total_bandwidth = 0
+
         while not done:
-            action = np.argmin(
-                [node["energy_base"] for _, node in env.topology.graph.nodes(data=True)]
+            valid_actions = env.get_valid_actions()
+            action = min(
+                valid_actions, key=lambda a: env.topology.graph.nodes[a]["energy_base"]
             )
-            state, reward, done, _ = env.step(action)
+            state, reward, done, info = env.step(action)
             total_energy += -reward
-        return total_energy
+            total_latency += info.get("latency", 0)
+            total_bandwidth += info.get("bandwidth", 0)
+
+        return {
+            "total_energy": total_energy,
+            "average_latency": total_latency / len(self.slices),
+            "average_bandwidth": total_bandwidth / len(self.slices),
+        }
 
     def round_robin_vnf_placement(self):
         """Round-robin VNF placement evaluation."""
@@ -60,10 +93,21 @@ class Evaluator:
         state = env.reset()
         done = False
         total_energy = 0
+        total_latency = 0
+        total_bandwidth = 0
         node_index = 0
+
         while not done:
-            action = node_index % env.action_space.n
+            valid_actions = env.get_valid_actions()
+            action = valid_actions[node_index % len(valid_actions)]
             node_index += 1
-            state, reward, done, _ = env.step(action)
+            state, reward, done, info = env.step(action)
             total_energy += -reward
-        return total_energy
+            total_latency += info.get("latency", 0)
+            total_bandwidth += info.get("bandwidth", 0)
+
+        return {
+            "total_energy": total_energy,
+            "average_latency": total_latency / len(self.slices),
+            "average_bandwidth": total_bandwidth / len(self.slices),
+        }
