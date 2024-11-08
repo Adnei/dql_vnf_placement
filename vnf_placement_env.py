@@ -22,6 +22,9 @@ class VNFPlacementEnv(gym.Env):
             shape=(len(self.node_ids), self.features_per_node),
             dtype=np.float32,
         )
+        self.cumulative_energy = 0
+        self.cumulative_latency = 0
+        self.cumulative_bandwidth = 0
 
     def reset(self):
         """Reset the environment for a new episode."""
@@ -109,6 +112,7 @@ class VNFPlacementEnv(gym.Env):
             if data["type"] == current_vnf.vnf_type
         ]
 
+        # _can_place_vnf_on_node also checks the vnf type. No need to pre-filter it
         valid_actions = [
             node_id
             for node_id in nodes_matching_vnf_type
@@ -126,7 +130,7 @@ class VNFPlacementEnv(gym.Env):
         done = False
         valid_actions = self.get_valid_actions()
         if action not in valid_actions:
-            print(f"ACTION MASK NOT RIGHT!!! ACTION SHOULD ALWAYS BE VALID!!!!")
+            print(f"Invalid action detected; action should always be valid!")
             return self._get_observation(), -1000, False, {}
 
         node_id = self.node_ids[action]
@@ -135,48 +139,59 @@ class VNFPlacementEnv(gym.Env):
         hypothetical_path = self._get_hypothetical_path(current_slice, node_id)
         info = {}
 
+        # Update network state with selected placement
         node = self.topology.graph.nodes[node_id]
         node["hosted_vnfs"].append(current_vnf)
         current_slice.path.extend(hypothetical_path[1:])
         node["cpu_usage"] += current_vnf.vcpu_usage
         chosen_energy = self._calculate_path_energy(current_slice.path)
 
-        min_energy = self._find_minimum_energy_placement(current_slice, current_vnf)
-        reward = 50 + (50 - (chosen_energy - min_energy) / min_energy * 50)
+        # Calculate minimum look-ahead energy and QoS penalty
+        min_energy = self._find_minimum_energy_placement(
+            current_slice, current_vnf, look_ahead=2
+        )
+        qos_penalty = -50 if not self._check_path_qos(current_slice.path) else 0
 
+        # Calculate reward with proximity to optimal cumulative energy
+        reward = (
+            50 + (50 - ((chosen_energy - min_energy) / min_energy) * 50) + qos_penalty
+        )
+
+        # Update cumulative info metrics (aggregating for all slices and VNFs)
+        self.cumulative_energy += chosen_energy
+        latency, _ = self._check_latency_feasibility(
+            node_id, current_slice, current_slice.path
+        )
+        self.cumulative_latency += latency
+
+        # Check remaining bandwidth for the current slice path
+        bandwidth_availability = np.inf
+        for node_idx in range(0, len(current_slice.path) - 1):
+            edge = self.topology.graph.edges[
+                current_slice.path[node_idx], current_slice.path[node_idx + 1]
+            ]
+            bandwidth_availability = min(
+                edge["link_capacity"] - edge["link_usage"], bandwidth_availability
+            )
+        self.cumulative_bandwidth += bandwidth_availability
+
+        # Update info metrics when a slice completes
         if self.current_vnf_index == len(current_slice.vnf_list) - 1:
             self._update_edges(current_slice)
             done = self.current_slice_index == len(self.slices) - 1
             if not done:
                 self.current_slice_index += 1
                 self.current_vnf_index = 1  # Assuming VNF 0 is already placed at origin
-                reward += 200
+                reward += 200  # Bonus for completing this slice
         else:
             self.current_vnf_index += 1
             done = False
 
+        # Final cumulative metrics when the episode ends
         if done:
-            info["total_energy"] = chosen_energy
-            info["e2e_latency"], _ = self._check_latency_feasibility(
-                node_id, current_slice, current_slice.path
-            )
-            bandwidth_availability = np.inf
-            for node_idx in range(0, len(current_slice.path) - 1):
-                bandwidth_availability = min(
-                    (
-                        self.topology.graph.edges[
-                            current_slice.path[node_idx],
-                            current_slice.path[node_idx + 1],
-                        ]["link_capacity"]
-                        - self.topology.graph.edges[
-                            current_slice.path[node_idx],
-                            current_slice.path[node_idx + 1],
-                        ]["link_usage"]
-                    ),
-                    bandwidth_availability,
-                )
-
-            info["remaining_bandwidth_in_slice_path"] = bandwidth_availability
+            info["total_energy"] = self.cumulative_energy
+            info["average_latency"] = self.cumulative_latency / len(self.slices)
+            info["average_bandwidth"] = self.cumulative_bandwidth / len(self.slices)
 
         return self._get_observation(), reward, done, info
 
@@ -274,7 +289,8 @@ class VNFPlacementEnv(gym.Env):
             print(f"Connected graph. It should have a path. Something is wrong!")
         return hypothetical_path
 
-    def _find_minimum_energy_placement(self, current_slice, current_vnf):
+    # This is a local minimum... This does not represent the minimum energy consumption of the whole slice. It considers only the current VNF being placed
+    def _find_minimum_energy_placement_greedy(self, current_slice, current_vnf):
         # Calculate the minimum energy among all possible valid placements for this VNF
         min_energy = float("inf")
         for alt_node_id in self.node_ids:
@@ -299,6 +315,67 @@ class VNFPlacementEnv(gym.Env):
                 if alt_energy < min_energy:
                     min_energy = alt_energy
         return min_energy
+
+    def _find_minimum_energy_placement(self, current_slice, current_vnf, look_ahead=2):
+        """
+        Calculate the minimum energy path by looking ahead up to a specified depth of VNFs.
+
+        :param current_slice: Current slice object
+        :param current_vnf: VNF being placed
+        :param look_ahead: Number of VNFs to look ahead for cumulative energy calculation
+        :return: Minimum cumulative energy considering up to `look_ahead` VNFs
+        """
+        min_cumulative_energy = float("inf")
+        current_path = current_slice.path
+
+        # Loop over nodes for current VNF placement
+        for alt_node_id in self.node_ids:
+            alt_path = self._get_hypothetical_path(current_slice, alt_node_id)
+            if not self._can_place_vnf_on_node(
+                current_vnf, alt_node_id, current_slice, alt_path
+            ):
+                continue
+
+            # Calculate energy for current VNF placement
+            current_energy = self._calculate_path_energy(
+                alt_path, place_vnf=current_vnf
+            )
+
+            # Look ahead for additional VNFs to estimate cumulative energy
+            cumulative_energy = current_energy
+            slice_snapshot = current_slice.path.copy()
+            slice_snapshot.extend(alt_path[1:])
+
+            # Look ahead for `look_ahead` subsequent VNFs
+            for lookahead_index in range(
+                1,
+                min(
+                    look_ahead + 1, len(current_slice.vnf_list) - self.current_vnf_index
+                ),
+            ):
+                next_vnf = current_slice.vnf_list[
+                    self.current_vnf_index + lookahead_index
+                ]
+                best_next_energy = float("inf")
+
+                # Check valid nodes for next VNF
+                for next_node_id in self.node_ids:
+                    next_path = self._get_hypothetical_path(current_slice, next_node_id)
+                    if self._can_place_vnf_on_node(
+                        next_vnf, next_node_id, current_slice, next_path
+                    ):
+                        next_energy = self._calculate_path_energy(
+                            next_path, place_vnf=next_vnf
+                        )
+                        best_next_energy = min(best_next_energy, next_energy)
+
+                cumulative_energy += best_next_energy
+
+            # Update minimum cumulative energy
+            if cumulative_energy < min_cumulative_energy:
+                min_cumulative_energy = cumulative_energy
+
+        return min_cumulative_energy
 
     def render(self, mode="human"):
         """Render the environment's current state."""
