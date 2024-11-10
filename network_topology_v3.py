@@ -1,25 +1,59 @@
 import networkx as nx
 import random
 import matplotlib.pyplot as plt
+import pickle
 
 
 class NetworkTopologyGenerator:
-    def __init__(self, n_nodes=50, avg_degree=4, rewire_prob=0.1):
+    def __init__(self, from_file=None, n_nodes=50, avg_degree=4, rewire_prob=0.1):
         self.n_nodes = n_nodes
         self.avg_degree = avg_degree
         self.rewire_prob = rewire_prob
-        self.graph = nx.connected_watts_strogatz_graph(
-            n=n_nodes, k=avg_degree, p=rewire_prob
-        )
         self.node_types = {}
-        self.initialize_node_types()
-        self.ensure_ran_edge_connections()
-        self.add_redundant_paths()
-        self.add_edge_interconnections()
-        self.ensure_no_ran_transport_connections()
-        self.ensure_no_ran_core_connections()
-        self.ensure_no_core_edge_connections()
-        self.add_edge_attributes()
+        if type(from_file) == str:
+            self.graph = self.import_graph_from_pickle(from_file)
+            self.node_types.update(
+                {
+                    node_id: "RAN"
+                    for node_id, node_data in self.graph.nodes(data=True)
+                    if node_data["type"] == "RAN"
+                }
+            )
+            self.node_types.update(
+                {
+                    node_id: "Edge"
+                    for node_id, node_data in self.graph.nodes(data=True)
+                    if node_data["type"] == "Edge"
+                }
+            )
+            self.node_types.update(
+                {
+                    node_id: "Transport"
+                    for node_id, node_data in self.graph.nodes(data=True)
+                    if node_data["type"] == "Transport"
+                }
+            )
+            self.node_types.update(
+                {
+                    node_id: "Core"
+                    for node_id, node_data in self.graph.nodes(data=True)
+                    if node_data["type"] == "Core"
+                }
+            )
+            print(f"Graph loaded from file: {from_file}")
+            print(f"Graph: {self.graph}")
+        else:
+            self.graph = nx.connected_watts_strogatz_graph(
+                n=n_nodes, k=avg_degree, p=rewire_prob
+            )
+            self.initialize_node_types()
+            self.ensure_ran_edge_connections()
+            self.add_redundant_paths()
+            self.add_edge_interconnections()
+            self.ensure_no_ran_transport_connections()
+            self.ensure_no_ran_core_connections()
+            self.ensure_no_core_edge_connections()
+            self.add_edge_attributes()
 
     def initialize_node_types(self):
         """Assigns node types in a hierarchical manner (RAN, Edge, Transport, Core)."""
@@ -242,3 +276,9 @@ class NetworkTopologyGenerator:
     def get_graph(self):
         """Returns the generated networkx graph with the applied topology."""
         return self.graph
+
+    def export_graph_to_pickle(self, filename="5G_Network_Topology.pickle"):
+        pickle.dump(self.graph, open(filename, "wb"))
+
+    def import_graph_from_pickle(self, filename="5G_Network_Topology.pickle"):
+        return pickle.load(open(filename, "rb"))
