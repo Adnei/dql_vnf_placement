@@ -25,7 +25,7 @@ class Evaluator:
 
         while not done:
             valid_actions = env.get_valid_actions()
-            action = self.agent.act(state, valid_actions)
+            action = self.agent.act(state, valid_actions, train=False)
             state, reward, done, info = env.step(action)
             total_reward += reward
 

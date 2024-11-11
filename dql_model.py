@@ -57,9 +57,9 @@ class DQNAgent:
         """Store experience in memory."""
         self.memory.append((state, action, reward, next_state, done))
 
-    def act(self, state, valid_actions):
+    def act(self, state, valid_actions, train=True):
         """Choose an action based on epsilon-greedy policy."""
-        if np.random.rand() <= self.epsilon:
+        if train and (np.random.rand() <= self.epsilon):
             return random.choice(valid_actions)
 
         state = torch.FloatTensor(state).unsqueeze(

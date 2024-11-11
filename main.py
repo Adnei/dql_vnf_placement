@@ -8,6 +8,8 @@ from network_topology_v3 import (
 )
 from vnfs_and_slices import NetworkSlice, VNF, QoS
 from input_slices import slices
+import numpy as np
+import matplotlib.pyplot as plt
 
 # Generate topology and slices
 topology = NetworkTopologyGenerator(50)
@@ -27,8 +29,10 @@ action_dim = env.action_space.n
 agent = DQNAgent(input_dim=input_dim, action_dim=action_dim, node_ids=node_ids)
 
 # Training the agent
-episodes = 1000
+episodes = 40000
 max_attempts = len(topology.graph.nodes) * 2
+scores = []
+plot = True
 for episode in range(episodes):
     state = env.reset()
     done = False
@@ -45,11 +49,19 @@ for episode in range(episodes):
         if done:
             break
 
+    scores.append(total_reward)
     agent.replay()  # Train on memory replay after each episode
     print(f"Episode {episode + 1}/{episodes}, Total Reward: {total_reward}")
 
 torch.save(agent.model.state_dict(), "dqn_model.pth")
 
+if plot:
+    plt.plot(np.arange(len(scores)), scores)
+    plt.xlabel("Episode #")
+    plt.ylabel("Score")
+    plt.title("Training Results")
+    plt.savefig("learning_scores.pdf")
+    # plt.show()
 
 print("\n\n")
 evaluator = Evaluator(agent, topology, slices)
