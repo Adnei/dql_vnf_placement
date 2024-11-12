@@ -112,6 +112,7 @@ agent = DQNAgent(input_dim=input_dim, action_dim=action_dim, node_ids=node_ids)
 total_episodes = 40000
 increment = 5000
 increments = total_episodes // increment
+# I'll be using it later on...
 max_attempts = len(topology.graph.nodes) * 2
 total_rewards = []
 average_rewards = []

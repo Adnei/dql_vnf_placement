@@ -340,7 +340,7 @@ class VNFPlacementEnv(gym.Env):
         :return: Minimum cumulative energy considering up to `look_ahead` VNFs
         """
         if look_ahead is None:
-            look_ahead = min(2, len(current_slice.vnf_list) - self.current_vnf_index)
+            look_ahead = min(3, len(current_slice.vnf_list) - self.current_vnf_index)
 
         min_cumulative_energy = float("inf")
         current_path = current_slice.path
