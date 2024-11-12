@@ -151,12 +151,24 @@ class VNFPlacementEnv(gym.Env):
             current_slice, current_vnf, look_ahead=2
         )
         qos_penalty = -50 if not self._check_path_qos(current_slice.path) else 0
-
+        # if qos_penalty < 0:
+        #     print(f"APPLIED QOS PENALTY!!!!!")
         # Calculate reward with proximity to optimal cumulative energy
+        # reward = (
+        #     100
+        #     + (100 - ((chosen_energy - min_energy) / min_energy) * 100)
+        #     + qos_penalty
+        # )
         reward = (
-            50 + (50 - ((chosen_energy - min_energy) / min_energy) * 50) + qos_penalty
+            100  # Baseline reward for valid actions
+            + (
+                100 - ((chosen_energy - min_energy) / min_energy) * 100
+            )  # Cumulative energy minimization scaling
+            + qos_penalty
+            * (
+                len(current_slice.vnf_list) - self.current_vnf_index
+            )  # Increasing penalty for deeper violations in the slice
         )
-
         # Update cumulative info metrics (aggregating for all slices and VNFs)
         self.cumulative_energy += chosen_energy
         latency, _ = self._check_latency_feasibility(
@@ -316,7 +328,9 @@ class VNFPlacementEnv(gym.Env):
                     min_energy = alt_energy
         return min_energy
 
-    def _find_minimum_energy_placement(self, current_slice, current_vnf, look_ahead=2):
+    def _find_minimum_energy_placement(
+        self, current_slice, current_vnf, look_ahead=None
+    ):
         """
         Calculate the minimum energy path by looking ahead up to a specified depth of VNFs.
 
@@ -325,6 +339,9 @@ class VNFPlacementEnv(gym.Env):
         :param look_ahead: Number of VNFs to look ahead for cumulative energy calculation
         :return: Minimum cumulative energy considering up to `look_ahead` VNFs
         """
+        if look_ahead is None:
+            look_ahead = min(2, len(current_slice.vnf_list) - self.current_vnf_index)
+
         min_cumulative_energy = float("inf")
         current_path = current_slice.path
 

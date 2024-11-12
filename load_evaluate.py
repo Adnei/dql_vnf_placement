@@ -8,10 +8,15 @@ from network_topology_v3 import (
 )
 from vnfs_and_slices import NetworkSlice, VNF, QoS
 from input_slices import slices
+import numpy as np
 
 # Generate topology and slices
-topology = NetworkTopologyGenerator(from_file="5G_Hierarchical_Topology.pickle")
-topology.draw()
+# topology = NetworkTopologyGenerator(from_file="5G_Hierarchical_Topology.pickle")
+topology = NetworkTopologyGenerator(
+    from_file="100_nodes_5G_Hierarchical_Topology.pickle"
+)
+# 100_nodes_5G_Hierarchical_Topology.pickle
+# topology.draw()
 
 for slice in slices:
     origin_node = random.choice(
@@ -45,3 +50,14 @@ print("Greedy Placement:", greedy_results)
 
 round_robin_results = evaluator.round_robin_vnf_placement()
 print("Round Robin Placement:", round_robin_results)
+
+# Additional comparison of DQN variance against other methods
+energy_variance = np.var(
+    [
+        dqn_results["total_energy"],
+        greedy_results["total_energy"],
+        random_results["total_energy"],
+        round_robin_results["total_energy"],
+    ]
+)
+print(f"Variance in total energy consumption across methods: {energy_variance}")
