@@ -92,7 +92,7 @@ def train_agent(env, agent, episodes, reward_history):
 
 
 # Generate topology and slices
-topology = NetworkTopologyGenerator(100)
+topology = NetworkTopologyGenerator(n_nodes=100)
 topology.export_graph_to_pickle("100_nodes_5G_Hierarchical_Topology.pickle")
 for slice in slices:
     origin_node = random.choice(

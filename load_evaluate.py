@@ -32,7 +32,9 @@ action_dim = env.action_space.n
 # print(f"Action Dim: {action_dim}")
 agent = DQNAgent(input_dim=input_dim, action_dim=action_dim, node_ids=node_ids)
 
-agent.model.load_state_dict(torch.load("dqn_model.pth", weights_only=True))
+agent.model.load_state_dict(
+    torch.load("dqn_model_checkpoint_4000.pth", weights_only=True)
+)
 
 print("\n\n")
 evaluator = Evaluator(agent, topology, slices)

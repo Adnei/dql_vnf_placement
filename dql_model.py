@@ -37,8 +37,8 @@ class DQNAgent:
         gamma=0.99,
         epsilon=1.0,
         lr=0.001,
-        epsilon_min=0.15,
-        epsilon_decay=0.995,
+        epsilon_min=0.10,  # 0.15
+        epsilon_decay=0.985,  # 0.995
     ):
         self.action_dim = action_dim
         self.node_ids = node_ids
